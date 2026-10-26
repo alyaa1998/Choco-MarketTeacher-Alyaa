@@ -961,7 +961,7 @@
         </div>
 
         <div class="space-y-4 flex-grow overflow-y-auto custom-scrollbar pr-1">
-          <div id="td-sync-status" class="text-[11px] font-semibold text-slate-500"></div>
+          <div class="flex items-center gap-2 flex-wrap"><div id="td-sync-status" class="text-[11px] font-semibold text-slate-500"></div><button onclick="loadSheetData(true)" class="text-[11px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-2.5 py-1 rounded-lg">🔄 Refresh</button></div>
 
           <!-- Top 3 Highest Earners -->
           <div class="space-y-1.5">
@@ -1546,6 +1546,7 @@
       if (Object.values(state.completedActivities).every(Boolean)) {
         updateLeaderboard(state.studentName, state.studentClass, state.totalBalance);
         saveScoreShared(state.studentName, state.studentClass, state.totalBalance);
+        sendScoreToSheet(state.studentName, state.studentClass, state.totalBalance);
       }
     }
 
@@ -1633,6 +1634,8 @@
     }
 
     function openTeacherDashboard() {
+      loadSheetData(false);
+      startSheetAutoRefresh();
       subscribeSharedData();
       renderLeaderboardRows();
       renderLogRows();
@@ -1715,6 +1718,7 @@
     }
 
     async function clearLogs() {
+      logsClearedAt = Date.now();
       state.logs = [];
       renderLogRows();
       if (sharedDb) {
@@ -1730,6 +1734,7 @@
     }
 
     function closeTeacherDashboard() {
+      clearInterval(sheetRefreshTimer); sheetRefreshTimer = null;
       document.getElementById('teacher-dashboard-modal').classList.add('hidden');
       document.getElementById('teacher-dashboard-modal').classList.remove('flex');
     }
@@ -1777,7 +1782,7 @@
 
     function setSyncStatus(ok) {
       const el = document.getElementById('td-sync-status');
-      if (!el) return;
+      if (!el || sheetOk !== null) return;
       el.innerText = ok
         ? '🔄 Live class record: scores and mistakes from all students\' devices appear here.'
         : '⚠️ Shared saving is not available on this device, so only scores played on this device are shown.';
@@ -1822,6 +1827,73 @@
         });
         renderLogRows();
       }, () => { sharedSubscribed = false; setSyncStatus(false); });
+    }
+
+
+    /* ===== Google Sheet link: scores from every device are collected in Teacher Alyaa's Google Sheet ===== */
+    const SHEET_URL = "https://script.google.com/macros/s/AKfycbxDnAWnj7e168wraCYweEm9kfK6_DsZrUo6k9vsV2e8ES0jsNO8qgBB4jzC-wPoz5aa4g/exec";
+    let logsClearedAt = 0;
+    let sheetRefreshTimer = null;
+    let sheetOk = null;
+
+    // Called when a student finishes: sends name, class, total, number of mistakes and the mistake list
+    function sendScoreToSheet(name, cls, total) {
+      const details = state.logs
+        .filter(l => l.student === name && l.studentClass === cls)
+        .map(l => ({ at: l.at, reason: l.reason, amount: l.amount }));
+      const payload = JSON.stringify({
+        name: name, class: cls, total: Number(Number(total).toFixed(2)),
+        mistakes: details.length, details: details
+      });
+      let tries = 0;
+      const attempt = () => {
+        tries++;
+        fetch(SHEET_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: payload, keepalive: true })
+          .catch(() => { if (tries < 4) setTimeout(attempt, 2000 * tries); });
+      };
+      attempt();
+    }
+
+    // Teacher dashboard: read all rows from the sheet and rebuild the ranking and mistake list
+    async function loadSheetData(showMsg) {
+      const st = document.getElementById('td-sync-status');
+      try {
+        const res = await fetch(SHEET_URL, { method: 'GET', cache: 'no-store' });
+        const rows = await res.json();
+        if (!Array.isArray(rows)) throw new Error('bad data');
+        const best = {};
+        const logs = [];
+        rows.forEach(row => {
+          const name = String(row.name || '').trim();
+          if (!name) return;
+          const cls = String(row['class'] || '').trim();
+          const total = Number(row.total) || 0;
+          const key = (name + '|' + cls).toLowerCase();
+          if (!best[key] || total > best[key].total) best[key] = { name: name, class: cls, total: total };
+          let det = [];
+          try { det = JSON.parse(row.details || '[]'); } catch (e) {}
+          (Array.isArray(det) ? det : []).forEach(d => {
+            const at = Number(d.at) || 0;
+            if (at && at <= logsClearedAt) return;
+            logs.push({ at: at, time: at ? fmtTime(at) : '', student: name, studentClass: cls, reason: String(d.reason || ''), amount: String(d.amount || '') });
+          });
+        });
+        state.leaderboard = Object.values(best);
+        logs.sort((a, b) => a.at - b.at);
+        state.logs = logs;
+        sheetOk = true;
+        renderLeaderboardRows();
+        renderLogRows();
+        if (st) st.innerText = '🔄 Live class record from Google Sheet (updated ' + new Date().toLocaleTimeString() + ').';
+      } catch (e) {
+        sheetOk = false;
+        if (st) st.innerText = '⚠️ Could not read the Google Sheet right now. Check the internet and press Refresh.';
+      }
+    }
+
+    function startSheetAutoRefresh() {
+      clearInterval(sheetRefreshTimer);
+      sheetRefreshTimer = setInterval(() => loadSheetData(false), 10000);
     }
 
     if (window.claude && typeof window.claude.use === 'function') {
