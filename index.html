@@ -629,7 +629,7 @@
           <span>Enter Chocolate Market</span>
           <span>🚀</span>
         </button>
-        <button onclick="openTeacherPinModal()" class="w-full bg-white hover:bg-amber-100 text-amber-900 font-bold py-2.5 px-6 rounded-xl border-2 border-amber-300 transition text-xs">
+        <button onclick="hostNewGame()" class="w-full bg-white hover:bg-amber-100 text-amber-900 font-bold py-2.5 px-6 rounded-xl border-2 border-amber-300 transition text-xs">
           👩‍🏫 I am a teacher: Host a game
         </button>
       </div>
@@ -1629,6 +1629,18 @@
     }
 
     /* Teacher PIN Modal */
+    // "Host a game" on the first page: always a NEW room (the previous room and its scores are deleted)
+    async function hostNewGame() {
+      if (hostRoom) {
+        showNotice('Starting a new game...');
+        await sheetCall('end', hostRoom);
+        hostRoom = null;
+        try { localStorage.removeItem('choco_host_room'); } catch (e) {}
+        state.leaderboard = []; state.logs = []; logsClearedAt = 0;
+      }
+      openTeacherPinModal();
+    }
+
     async function openTeacherPinModal() {
       // Host a game: the first time a room is created, later the same room is reopened
       if (!hostRoom) {
@@ -2027,7 +2039,7 @@
 
     function startSheetAutoRefresh() {
       clearInterval(sheetRefreshTimer);
-      sheetRefreshTimer = setInterval(() => loadSheetData(false), 10000);
+      sheetRefreshTimer = setInterval(() => loadSheetData(false), 4000);
     }
 
     if (window.claude && typeof window.claude.use === 'function') {
